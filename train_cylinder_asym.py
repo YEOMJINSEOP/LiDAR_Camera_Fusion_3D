@@ -22,6 +22,7 @@ from utils.load_save_util import load_checkpoint
 import warnings
 
 warnings.filterwarnings("ignore")
+import wandb
 
 
 def main(args):
@@ -72,7 +73,14 @@ def main(args):
                                                                   train_dataloader_config,
                                                                   val_dataloader_config,
                                                                   grid_size=grid_size)
-
+    
+    wandb.init(project="cylinder3d_dummy_img_fea(sub_data)", name="cylinder3d_lidar+camera_sub")
+    wandb.config = {
+        "learning_rate": train_hypers["learning_rate"],
+        "epochs": train_hypers["max_num_epochs"],
+        "batch_size(train)": train_dataloader_config['batch_size'] 
+    }
+    
     # training
     epoch = 0
     best_val_miou = 0
@@ -81,27 +89,28 @@ def main(args):
     check_iter = train_hypers['eval_every_n_steps']
 
     while epoch < train_hypers['max_num_epochs']:
+        print(f'EPOCH {epoch}')
         loss_list = []
         pbar = tqdm(total=len(train_dataset_loader))
         time.sleep(10)
         # lr_scheduler.step(epoch)
-        for i_iter, (_, train_vox_label, train_grid, _, train_pt_fea) in enumerate(train_dataset_loader):
+        for i_iter, (_1, train_vox_label, train_grid, _2, train_pt_fea, train_img_fea) in enumerate(train_dataset_loader):
             if global_iter % check_iter == 0 and epoch >= 1:
-                
                 # Evaluation set
                 my_model.eval()
                 hist_list = []
                 val_loss_list = []
                 with torch.no_grad():
-                    for i_iter_val, (_, val_vox_label, val_grid, val_pt_labs, val_pt_fea) in enumerate(
+                    for i_iter_val, (_, val_vox_label, val_grid, val_pt_labs, val_pt_fea, val_img_fea) in enumerate(
                             val_dataset_loader):
-
+                        
                         val_pt_fea_ten = [torch.from_numpy(i).type(torch.FloatTensor).to(pytorch_device) for i in
                                           val_pt_fea]
                         val_grid_ten = [torch.from_numpy(i).to(pytorch_device) for i in val_grid]
                         val_label_tensor = val_vox_label.type(torch.LongTensor).to(pytorch_device)
-
-                        predict_labels = my_model(val_pt_fea_ten, val_grid_ten, val_batch_size)
+                        val_img_fea_ten = [i.type(torch.FloatTensor).to(pytorch_device) for i in val_img_fea]
+                                              
+                        predict_labels = my_model(val_pt_fea_ten, val_img_fea_ten, val_grid_ten, val_batch_size)
                         # aux_loss = loss_fun(aux_outputs, point_label_tensor)
                         loss = lovasz_softmax(torch.nn.functional.softmax(predict_labels).detach(), val_label_tensor,
                                               ignore=0) + loss_func(predict_labels.detach(), val_label_tensor)
@@ -119,7 +128,10 @@ def main(args):
                 print('Validation per class iou: ')
                 for class_name, class_iou in zip(unique_label_str, iou):
                     print('%s : %.2f%%' % (class_name, class_iou * 100))
+                    wandb.log({f'Val_IoU/{class_name}': class_iou * 100}, step=global_iter)
+                    
                 val_miou = np.nanmean(iou) * 100
+                wandb.log({'Val_mIoU': val_miou}, step=global_iter)                
                 del val_vox_label, val_grid, val_pt_fea, val_grid_ten
 
                 # save model if performance is improved
@@ -137,10 +149,11 @@ def main(args):
             # train_grid_ten = [torch.from_numpy(i[:,:2]).to(pytorch_device) for i in train_grid]
             train_vox_ten = [torch.from_numpy(i).to(pytorch_device) for i in train_grid]
             point_label_tensor = train_vox_label.type(torch.LongTensor).to(pytorch_device)
+            train_img_fea_ten = [i.type(torch.FloatTensor).to(pytorch_device) for i in train_img_fea]
 
             # forward + backward + optimize
             with torch.cuda.amp.autocast(enabled=amp):
-                outputs = my_model(train_pt_fea_ten, train_vox_ten, train_batch_size)
+                outputs = my_model(train_pt_fea_ten, train_img_fea_ten, train_vox_ten, train_batch_size)
                 loss = lovasz_softmax(torch.nn.functional.softmax(outputs), point_label_tensor, ignore=0) + loss_func(
                     outputs, point_label_tensor)
             amp_scaler.scale(loss).backward()
@@ -149,11 +162,14 @@ def main(args):
             # optimizer.step()
 
             loss_list.append(loss.item())
+            wandb.log({'Train_loss': np.mean(loss_list)}, step=global_iter)
 
             if global_iter % 1000 == 0:
                 if len(loss_list) > 0:
                     print('epoch %d iter %5d, loss: %.3f\n' %
                           (epoch, i_iter, np.mean(loss_list)))
+                    wandb.log({"Training Loss": {loss.item()}, "Epoch": epoch})
+                    
                 else:
                     print('loss error')
 

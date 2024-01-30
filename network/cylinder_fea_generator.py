@@ -13,13 +13,15 @@ import torch_scatter
 class cylinder_fea(nn.Module):
 
     def __init__(self, grid_size, fea_dim=3,
-                 out_pt_fea_dim=64, max_pt_per_encode=64, fea_compre=None):
+                 out_pt_fea_dim=64, max_pt_per_encode=64, fea_compre=None, img_fea_dim=3):
         super(cylinder_fea, self).__init__()
 
+        fused_fea_dim = fea_dim + img_fea_dim
+                     
         self.PPmodel = nn.Sequential(
-            nn.BatchNorm1d(fea_dim),
+            nn.BatchNorm1d(fused_fea_dim),
 
-            nn.Linear(fea_dim, 64),
+            nn.Linear(fused_fea_dim, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(),
 
@@ -52,7 +54,7 @@ class cylinder_fea(nn.Module):
         else:
             self.pt_fea_dim = self.pool_dim
 
-    def forward(self, pt_fea, xy_ind):
+    def forward(self, pt_fea, img_fea, xy_ind):
         cur_dev = pt_fea[0].get_device()
 
         # concate everything
@@ -60,13 +62,19 @@ class cylinder_fea(nn.Module):
         for i_batch in range(len(xy_ind)):
             cat_pt_ind.append(F.pad(xy_ind[i_batch], (1, 0), 'constant', value=i_batch))
 
-        cat_pt_fea = torch.cat(pt_fea, dim=0)
         cat_pt_ind = torch.cat(cat_pt_ind, dim=0)
         pt_num = cat_pt_ind.shape[0]
 
+        # Point - Image Fusion
+        cat_pt_fea = torch.cat(pt_fea, dim=0)
+        cat_img_fea = torch.cat(img_fea, dim=0)  
+        cat_fused_fea = torch.cat((cat_pt_fea, cat_img_fea), dim=1) # [pts, 9(pt_fea) + 3(img_fea)]
+
+        # print(f'cat_fused_fea: {cat_fused_fea[:, 9:]}')
         # shuffle the data
         shuffled_ind = torch.randperm(pt_num, device=cur_dev)
-        cat_pt_fea = cat_pt_fea[shuffled_ind, :]
+        
+        cat_fused_fea = cat_fused_fea[shuffled_ind, :]
         cat_pt_ind = cat_pt_ind[shuffled_ind, :]
 
         # unique xy grid index
@@ -74,9 +82,9 @@ class cylinder_fea(nn.Module):
         unq = unq.type(torch.int64)
 
         # process feature
-        processed_cat_pt_fea = self.PPmodel(cat_pt_fea)
-        pooled_data = torch_scatter.scatter_max(processed_cat_pt_fea, unq_inv, dim=0)[0]
-
+        processed_cat_fused_fea = self.PPmodel(cat_fused_fea)
+        pooled_data = torch_scatter.scatter_max(processed_cat_fused_fea, unq_inv, dim=0)[0]
+        
         if self.fea_compre:
             processed_pooled_data = self.fea_compression(pooled_data)
         else:

@@ -38,8 +38,8 @@ class cylinder_asym(nn.Module):
 
         self.sparse_shape = sparse_shape
 
-    def forward(self, train_pt_fea_ten, train_vox_ten, batch_size):
-        coords, features_3d = self.cylinder_3d_generator(train_pt_fea_ten, train_vox_ten)
+    def forward(self, train_pt_fea_ten, train_img_fea_ten, train_vox_ten, batch_size):
+        coords, features_3d = self.cylinder_3d_generator(train_pt_fea_ten, train_img_fea_ten, train_vox_ten)
 
         spatial_features = self.cylinder_3d_spconv_seg(features_3d, coords, batch_size)
 

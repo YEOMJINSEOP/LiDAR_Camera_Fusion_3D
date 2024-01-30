@@ -29,7 +29,8 @@ warnings.filterwarnings("ignore")
 def build_dataset(dataset_config,
                   data_dir,
                   grid_size=[480, 360, 32],
-                  demo_label_dir=None):
+                  demo_label_dir=None,
+                  demo_img_fea_dir='/home/poscoict/Desktop/c3d_semKITTI_refined/dataset/sequences/08/img_fea/'):
 
     if demo_label_dir == '':
         imageset = "demo"
@@ -39,8 +40,8 @@ def build_dataset(dataset_config,
 
     SemKITTI_demo = get_pc_model_class('SemKITTI_demo')
 
-    demo_pt_dataset = SemKITTI_demo(data_dir, imageset=imageset,
-                              return_ref=True, label_mapping=label_mapping, demo_label_path=demo_label_dir)
+    demo_pt_dataset = SemKITTI_demo(data_dir, split=imageset,
+                              return_ref=True, label_mapping=label_mapping, demo_label_path=demo_label_dir, demo_img_fea_path=demo_img_fea_dir)
 
     demo_dataset = get_model_class(dataset_config['dataset_type'])(
         demo_pt_dataset,
@@ -65,6 +66,7 @@ def main(args):
     dataset_config = configs['dataset_params']
     data_dir = args.demo_folder
     demo_label_dir = args.demo_label_folder
+    demo_img_fea_dir = args.demo_img_fea_folder
     save_dir = args.save_folder + "/"
 
     demo_batch_size = 1
@@ -90,7 +92,7 @@ def main(args):
     loss_func, lovasz_softmax = loss_builder.build(wce=True, lovasz=True,
                                                    num_class=num_class, ignore_label=ignore_label)
 
-    demo_dataset_loader = build_dataset(dataset_config, data_dir, grid_size=grid_size, demo_label_dir=demo_label_dir)
+    demo_dataset_loader = build_dataset(dataset_config, data_dir, grid_size=grid_size, demo_label_dir=demo_label_dir, demo_img_fea_dir=demo_img_fea_dir)
     with open(dataset_config["label_mapping"], 'r') as stream:
         semkittiyaml = yaml.safe_load(stream)
     inv_learning_map = semkittiyaml['learning_map_inv']
@@ -99,14 +101,16 @@ def main(args):
     hist_list = []
     demo_loss_list = []
     with torch.no_grad():
-        for i_iter_demo, (_, demo_vox_label, demo_grid, demo_pt_labs, demo_pt_fea) in enumerate(
+        for i_iter_demo, (_, demo_vox_label, demo_grid, demo_pt_labs, demo_pt_fea, demo_img_fea) in enumerate(
                 demo_dataset_loader):
             demo_pt_fea_ten = [torch.from_numpy(i).type(torch.FloatTensor).to(pytorch_device) for i in
                               demo_pt_fea]
             demo_grid_ten = [torch.from_numpy(i).to(pytorch_device) for i in demo_grid]
             demo_label_tensor = demo_vox_label.type(torch.LongTensor).to(pytorch_device)
-
-            predict_labels = my_model(demo_pt_fea_ten, demo_grid_ten, demo_batch_size)
+            demo_img_fea_ten = [i.type(torch.FloatTensor).to(pytorch_device) for i in demo_img_fea]
+                    
+            predict_labels = my_model(demo_pt_fea_ten, demo_img_fea_ten, demo_grid_ten, demo_batch_size)
+                    
             loss = lovasz_softmax(torch.nn.functional.softmax(predict_labels).detach(), demo_label_tensor,
                                   ignore=0) + loss_func(predict_labels.detach(), demo_label_tensor)
             predict_labels = torch.argmax(predict_labels, dim=1)
@@ -144,6 +148,7 @@ if __name__ == '__main__':
     parser.add_argument('--demo-folder', type=str, default='', help='path to the folder containing demo lidar scans', required=True)
     parser.add_argument('--save-folder', type=str, default='', help='path to save your result', required=True)
     parser.add_argument('--demo-label-folder', type=str, default='', help='path to the folder containing demo labels')
+    parser.add_argument('--demo-img-fea-folder', type=str, default='', help='path to the folder containing demo img fea')
     args = parser.parse_args()
 
     print(' '.join(sys.argv))
